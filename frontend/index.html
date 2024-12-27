@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas Code Editor</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+        #file-explorer {
+            width: 250px;
+            height: 100%;
+            border-right: 1px solid #ccc;
+            overflow: auto;
+            background: #1e1e1e;
+            padding: 10px;
+            color: #fff;
+        }
+        .main-container {
+            flex: 1;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+        }
+        #tab-bar {
+            height: 35px;
+            background: #252526;
+            display: flex;
+            overflow-x: auto;
+            border-bottom: 1px solid #333;
+        }
+        .tab {
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            background: #2d2d2d;
+            color: #969696;
+            border-right: 1px solid #333;
+            cursor: pointer;
+            min-width: 100px;
+            max-width: 200px;
+            position: relative;
+            user-select: none;
+        }
+        .tab.active {
+            background: #1e1e1e;
+            color: #fff;
+        }
+        .tab-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 8px 35px 8px 10px;
+        }
+        .tab-close {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 3px;
+        }
+        .tab-close:hover {
+            background: #404040;
+        }
+        #editor-container {
+            flex: 1;
+            position: relative;
+        }
+        .file-item {
+            padding: 4px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .file-item:hover {
+            background: #2d2d2d;
+        }
+        .title {
+            font-size: 1.2em;
+            font-weight: bold;
+            padding: 10px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 10px;
+        }
+        /* Hide scrollbar for tab bar */
+        #tab-bar::-webkit-scrollbar {
+            display: none;
+        }
+        #tab-bar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .tab-modified {
+            position: absolute;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="file-explorer">
+        <div class="title">Files</div>
+        <div id="file-list"></div>
+    </div>
+    <div class="main-container">
+        <div id="tab-bar"></div>
+        <div id="editor-container"></div>
+    </div>
+
+    <script src="./min/vs/loader.js"></script>
+    <script>
+        require.config({ paths: { vs: './min/vs' } });
+
+        let editor;
+        let openedFiles = new Map(); // Map to store opened files: path -> { model, viewState, isModified }
+        let currentFile = null;
+
+        require(['vs/editor/editor.main'], function() {
+            editor = monaco.editor.create(document.getElementById('editor-container'), {
+                value: '// Select a file to edit',
+                language: 'plaintext',
+                theme: 'vs-dark',
+                automaticLayout: true,
+                fontSize: 14,
+                minimap: {
+                    enabled: true
+                }
+            });
+
+            // Listen for content changes
+            editor.onDidChangeModelContent(() => {
+                if (currentFile) {
+                    const file = openedFiles.get(currentFile);
+                    if (file && !file.isModified) {
+                        file.isModified = true;
+                        updateTabs();
+                    }
+                }
+            });
+        });
+
+        const API_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8080' 
+            : `http://${window.location.hostname}:8080`;
+
+        async function loadFileList() {
+            try {
+                const response = await fetch(`${API_URL}/files`);
+                const files = await response.json();
+                const explorer = document.getElementById('file-list');
+                explorer.innerHTML = files.map(file => 
+                    `<div class="file-item" onclick="openFile('${file}')">${file}</div>`
+                ).join('');
+            } catch (error) {
+                console.error('Error loading file list:', error);
+                document.getElementById('file-list').innerHTML = 
+                    '<div style="color: #ff6b6b; padding: 10px;">Error loading files. Please check the console.</div>';
+            }
+        }
+
+        function updateTabs() {
+            const tabBar = document.getElementById('tab-bar');
+            tabBar.innerHTML = Array.from(openedFiles.keys()).map(path => {
+                const file = openedFiles.get(path);
+                const isActive = path === currentFile;
+                return `
+                    <div class="tab ${isActive ? 'active' : ''}" onclick="switchToFile('${path}')">
+                        <div class="tab-title">${path.split('/').pop()}</div>
+                        ${file.isModified ? '<div class="tab-modified"></div>' : ''}
+                        <div class="tab-close" onclick="closeFile('${path}', event)">✕</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function openFile(path) {
+            try {
+                if (!openedFiles.has(path)) {
+                    const response = await fetch(`${API_URL}/file/${encodeURIComponent(path)}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const content = await response.text();
+                    const language = getLanguageFromPath(path);
+                    const model = monaco.editor.createModel(content, language);
+                    openedFiles.set(path, { 
+                        model, 
+                        viewState: null, 
+                        isModified: false,
+                        originalContent: content 
+                    });
+                }
+                switchToFile(path);
+            } catch (error) {
+                console.error('Error opening file:', error);
+                editor.setValue(`// Error loading file: ${path}\n// ${error.message}`);
+            }
+        }
+
+        function switchToFile(path) {
+            if (currentFile) {
+                // Save the view state of the current file
+                const current = openedFiles.get(currentFile);
+                if (current) {
+                    current.viewState = editor.saveViewState();
+                }
+            }
+
+            const file = openedFiles.get(path);
+            if (file) {
+                editor.setModel(file.model);
+                if (file.viewState) {
+                    editor.restoreViewState(file.viewState);
+                }
+                currentFile = path;
+                updateTabs();
+                editor.focus();
+            }
+        }
+
+        function closeFile(path, event) {
+            event.stopPropagation(); // Prevent triggering switchToFile
+            
+            const file = openedFiles.get(path);
+            if (file) {
+                if (file.isModified) {
+                    const shouldClose = confirm(`File "${path}" has unsaved changes. Close anyway?`);
+                    if (!shouldClose) {
+                        return;
+                    }
+                }
+                file.model.dispose();
+                openedFiles.delete(path);
+                
+                if (currentFile === path) {
+                    // Switch to the last opened file or create a new empty model
+                    const remainingFiles = Array.from(openedFiles.keys());
+                    if (remainingFiles.length > 0) {
+                        switchToFile(remainingFiles[remainingFiles.length - 1]);
+                    } else {
+                        currentFile = null;
+                        editor.setModel(monaco.editor.createModel('// Select a file to edit', 'plaintext'));
+                    }
+                }
+                updateTabs();
+            }
+        }
+
+        function getLanguageFromPath(path) {
+            const ext = path.split('.').pop().toLowerCase();
+            const langMap = {
+                'js': 'javascript',
+                'ts': 'typescript',
+                'html': 'html',
+                'css': 'css',
+                'json': 'json',
+                'rs': 'rust',
+                'py': 'python',
+                'md': 'markdown',
+                'toml': 'toml',
+                'yaml': 'yaml',
+                'yml': 'yaml',
+                'dockerfile': 'dockerfile'
+            };
+            return langMap[ext] || 'plaintext';
+        }
+
+        // Load file list when page loads
+        loadFileList();
+    </script>
+</body>
+</html>

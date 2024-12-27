@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas Code Editor</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #1e1e1e;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 1;
+        }
+
+        #infinite-canvas {
+            position: absolute;
+            transform-origin: 0 0;
+            background: #1e1e1e;
+            cursor: grab;
+            width: 10000px;
+            height: 10000px;
+        }
+
+        #infinite-canvas.grabbing {
+            cursor: grabbing;
+        }
+
+        .editor-instance {
+            position: absolute;
+            background: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 4px;
+            overflow: visible;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            min-width: 400px;
+            min-height: 300px;
+            z-index: 100;
+        }
+
+        .editor-instance .tab-bar {
+            height: 35px;
+            background: #252526;
+            display: flex;
+            overflow-x: auto;
+            border-bottom: 1px solid #333;
+        }
+
+        .editor-instance .editor-container {
+            flex: 1;
+            position: relative;
+            height: 300px;
+            overflow: hidden;
+        }
+
+        .tab {
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            background: #2d2d2d;
+            color: #969696;
+            border-right: 1px solid #333;
+            cursor: pointer;
+            min-width: 100px;
+            max-width: 200px;
+            position: relative;
+            user-select: none;
+        }
+
+        .tab.active {
+            background: #1e1e1e;
+            color: #fff;
+        }
+
+        .tab-title {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 8px 35px 8px 10px;
+        }
+
+        .tab-modified {
+            position: absolute;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #fff;
+        }
+
+        .tab-close {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 3px;
+        }
+
+        .tab-close:hover {
+            background: #404040;
+        }
+
+        #file-explorer {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            width: 250px;
+            height: calc(100vh - 40px);
+            background: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 4px;
+            overflow: auto;
+            padding: 10px;
+            color: #fff;
+            z-index: 1000;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        .file-item {
+            padding: 4px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .file-item:hover {
+            background: #2d2d2d;
+        }
+
+        .title {
+            font-size: 1.2em;
+            font-weight: bold;
+            padding: 10px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 10px;
+        }
+
+        .editor-instance .resize-handle {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: transparent;
+            right: -10px;
+            bottom: -10px;
+            cursor: nwse-resize;
+            z-index: 101;
+        }
+
+        .editor-instance .resize-handle::after {
+            content: '';
+            position: absolute;
+            right: 5px;
+            bottom: 5px;
+            width: 10px;
+            height: 10px;
+            background: #666;
+            border-radius: 50%;
+        }
+
+        .editor-instance .move-handle {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 35px;
+            cursor: move;
+            z-index: 101;
+        }
+
+        #zoom-controls {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            gap: 10px;
+            background: #252526;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .zoom-btn {
+            background: #333;
+            border: none;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .zoom-btn:hover {
+            background: #444;
+        }
+    </style>
+</head>
+<body>
+    <div id="file-explorer">
+        <div class="title">Files</div>
+        <div id="file-list"></div>
+    </div>
+
+    <div id="canvas-container">
+        <div id="infinite-canvas"></div>
+    </div>
+
+    <div id="zoom-controls">
+        <button class="zoom-btn" onclick="zoomCanvas(0.1)">+</button>
+        <button class="zoom-btn" onclick="zoomCanvas(-0.1)">-</button>
+        <button class="zoom-btn" onclick="resetCanvas()">Reset</button>
+    </div>
+
+    <script src="./min/vs/loader.js"></script>
+    <script>
+        require.config({ paths: { vs: './min/vs' } });
+
+        let canvasEl = document.getElementById('infinite-canvas');
+        let isDragging = false;
+        let startX, startY, scrollLeft, scrollTop;
+        let scale = 1;
+        let editors = new Map(); // Map to store editor instances: instanceId -> { editor, files }
+
+        // Canvas panning
+        function initializeCanvas() {
+            canvasEl.style.transform = `scale(${scale})`;
+            canvasEl.addEventListener('mousedown', startDragging);
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', stopDragging);
+            document.addEventListener('wheel', handleZoom);
+        }
+
+        function startDragging(e) {
+            if (e.target === canvasEl) {
+                isDragging = true;
+                canvasEl.classList.add('grabbing');
+                startX = e.pageX - canvasEl.offsetLeft;
+                startY = e.pageY - canvasEl.offsetTop;
+                scrollLeft = canvasEl.offsetLeft;
+                scrollTop = canvasEl.offsetTop;
+            }
+        }
+
+        function drag(e) {
+            if (!isDragging) return;
+            e.preventDefault();
+            const x = e.pageX - startX;
+            const y = e.pageY - startY;
+            canvasEl.style.left = `${x}px`;
+            canvasEl.style.top = `${y}px`;
+        }
+
+        function stopDragging() {
+            isDragging = false;
+            canvasEl.classList.remove('grabbing');
+        }
+
+        function handleZoom(e) {
+            if (e.ctrlKey) {
+                e.preventDefault();
+                const delta = -Math.sign(e.deltaY) * 0.1;
+                zoomCanvas(delta);
+            }
+        }
+
+        function zoomCanvas(delta) {
+            const newScale = Math.min(Math.max(0.1, scale + delta), 3);
+            scale = newScale;
+            canvasEl.style.transform = `scale(${scale})`;
+        }
+
+        function resetCanvas() {
+            scale = 1;
+            canvasEl.style.transform = `scale(${scale})`;
+            canvasEl.style.left = '0px';
+            canvasEl.style.top = '0px';
+        }
+
+        // Editor instance management
+        function createEditorInstance(x, y) {
+            const instanceId = `editor-${Date.now()}`;
+            const container = document.createElement('div');
+            container.className = 'editor-instance';
+            container.style.left = `${x}px`;
+            container.style.top = `${y}px`;
+            container.innerHTML = `
+                <div class="move-handle"></div>
+                <div class="tab-bar"></div>
+                <div class="editor-container" id="${instanceId}"></div>
+                <div class="resize-handle"></div>
+            `;
+            canvasEl.appendChild(container);
+
+            const editor = monaco.editor.create(document.getElementById(instanceId), {
+                value: '// Select a file to edit',
+                language: 'plaintext',
+                theme: 'vs-dark',
+                automaticLayout: true,
+                fontSize: 14,
+                minimap: { enabled: true }
+            });
+
+            makeResizable(container);
+            makeDraggable(container);
+
+            editors.set(instanceId, {
+                editor,
+                container,
+                files: new Map(),
+                currentFile: null
+            });
+
+            return instanceId;
+        }
+
+        function makeDraggable(element) {
+            const handle = element.querySelector('.move-handle');
+            let isDragging = false;
+            let currentX;
+            let currentY;
+            let initialX;
+            let initialY;
+
+            handle.addEventListener('mousedown', e => {
+                isDragging = true;
+                initialX = e.clientX - element.offsetLeft;
+                initialY = e.clientY - element.offsetTop;
+            });
+
+            document.addEventListener('mousemove', e => {
+                if (isDragging) {
+                    e.preventDefault();
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+                    element.style.left = `${currentX}px`;
+                    element.style.top = `${currentY}px`;
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        }
+
+        function makeResizable(element) {
+            const handle = element.querySelector('.resize-handle');
+            let isResizing = false;
+            let originalWidth;
+            let originalHeight;
+            let originalX;
+            let originalY;
+
+            handle.addEventListener('mousedown', e => {
+                isResizing = true;
+                originalWidth = element.offsetWidth;
+                originalHeight = element.offsetHeight;
+                originalX = e.clientX;
+                originalY = e.clientY;
+            });
+
+            document.addEventListener('mousemove', e => {
+                if (isResizing) {
+                    const width = originalWidth + (e.clientX - originalX);
+                    const height = originalHeight + (e.clientY - originalY);
+                    element.style.width = `${width}px`;
+                    element.style.height = `${height}px`;
+                    // Trigger Monaco editor layout update
+                    const instanceId = element.querySelector('.editor-container').id;
+                    const editorInstance = editors.get(instanceId);
+                    if (editorInstance) {
+                        editorInstance.editor.layout();
+                    }
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                isResizing = false;
+            });
+        }
+
+        const API_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8080' 
+            : `http://${window.location.hostname}:8080`;
+
+        async function loadFileList() {
+            try {
+                const response = await fetch(`${API_URL}/files`);
+                const files = await response.json();
+                const explorer = document.getElementById('file-list');
+                explorer.innerHTML = files.map(file => 
+                    `<div class="file-item" onclick="openFileInNewEditor('${file}')">${file}</div>`
+                ).join('');
+            } catch (error) {
+                console.error('Error loading file list:', error);
+                document.getElementById('file-list').innerHTML = 
+                    '<div style="color: #ff6b6b; padding: 10px;">Error loading files. Please check the console.</div>';
+            }
+        }
+
+        async function openFileInNewEditor(path) {
+            // Create new editor at a random position in the viewport
+            const x = Math.random() * (window.innerWidth - 500) + 100;
+            const y = Math.random() * (window.innerHeight - 400) + 100;
+            const instanceId = createEditorInstance(x, y);
+            await openFile(path, instanceId);
+        }
+
+        async function openFile(path, instanceId) {
+            const editorInstance = editors.get(instanceId);
+            if (!editorInstance) return;
+
+            try {
+                if (!editorInstance.files.has(path)) {
+                    const response = await fetch(`${API_URL}/file/${encodeURIComponent(path)}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const content = await response.text();
+                    const language = getLanguageFromPath(path);
+                    const model = monaco.editor.createModel(content, language);
+                    editorInstance.files.set(path, { 
+                        model, 
+                        viewState: null, 
+                        isModified: false,
+                        originalContent: content 
+                    });
+                }
+                switchToFile(path, instanceId);
+            } catch (error) {
+                console.error('Error opening file:', error);
+                editorInstance.editor.setValue(`// Error loading file: ${path}\n// ${error.message}`);
+            }
+        }
+
+        function updateTabs(instanceId) {
+            const editorInstance = editors.get(instanceId);
+            if (!editorInstance) return;
+
+            const tabBar = editorInstance.container.querySelector('.tab-bar');
+            tabBar.innerHTML = Array.from(editorInstance.files.keys()).map(path => {
+                const file = editorInstance.files.get(path);
+                const isActive = path === editorInstance.currentFile;
+                return `
+                    <div class="tab ${isActive ? 'active' : ''}" onclick="switchToFile('${path}', '${instanceId}')">
+                        <div class="tab-title">${path.split('/').pop()}</div>
+                        ${file.isModified ? '<div class="tab-modified"></div>' : ''}
+                        <div class="tab-close" onclick="closeFile('${path}', '${instanceId}', event)">✕</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function switchToFile(path, instanceId) {
+            const editorInstance = editors.get(instanceId);
+            if (!editorInstance) return;
+
+            if (editorInstance.currentFile) {
+                const current = editorInstance.files.get(editorInstance.currentFile);
+                if (current) {
+                    current.viewState = editorInstance.editor.saveViewState();
+                }
+            }
+
+            const file = editorInstance.files.get(path);
+            if (file) {
+                editorInstance.editor.setModel(file.model);
+                if (file.viewState) {
+                    editorInstance.editor.restoreViewState(file.viewState);
+                }
+                editorInstance.currentFile = path;
+                updateTabs(instanceId);
+                editorInstance.editor.focus();
+            }
+        }
+
+        function closeFile(path, instanceId, event) {
+            event.stopPropagation();
+            
+            const editorInstance = editors.get(instanceId);
+            if (!editorInstance) return;
+
+            const file = editorInstance.files.get(path);
+            if (file) {
+                if (file.isModified) {
+                    const shouldClose = confirm(`File "${path}" has unsaved changes. Close anyway?`);
+                    if (!shouldClose) {
+                        return;
+                    }
+                }
+                file.model.dispose();
+                editorInstance.files.delete(path);
+                
+                if (editorInstance.currentFile === path) {
+                    const remainingFiles = Array.from(editorInstance.files.keys());
+                    if (remainingFiles.length > 0) {
+                        switchToFile(remainingFiles[remainingFiles.length - 1], instanceId);
+                    } else {
+                        editorInstance.currentFile = null;
+                        editorInstance.editor.setModel(monaco.editor.createModel('// Select a file to edit', 'plaintext'));
+                    }
+                }
+                updateTabs(instanceId);
+            }
+        }
+
+        function getLanguageFromPath(path) {
+            const ext = path.split('.').pop().toLowerCase();
+            const langMap = {
+                'js': 'javascript',
+                'ts': 'typescript',
+                'html': 'html',
+                'css': 'css',
+                'json': 'json',
+                'rs': 'rust',
+                'py': 'python',
+                'md': 'markdown',
+                'toml': 'toml',
+                'yaml': 'yaml',
+                'yml': 'yaml',
+                'dockerfile': 'dockerfile'
+            };
+            return langMap[ext] || 'plaintext';
+        }
+
+        // Initialize everything when Monaco is loaded
+        require(['vs/editor/editor.main'], function() {
+            initializeCanvas();
+            loadFileList();
+        });
+    </script>
+</body>
+</html> 
