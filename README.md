@@ -80,5 +80,4 @@ MIT License
 ║                                                                 ║
 ╚═════════════════════════════════════════════════════════════════╝
 
-All generated using Cursor - The AI-first Code Editor
-"Turn your phone into a mic, let your voice be heard through the bytes."
+All generated using Cursor
